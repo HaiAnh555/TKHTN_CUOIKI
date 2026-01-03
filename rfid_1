@@ -1,0 +1,134 @@
+#include "xparameters.h"
+#include "xil_printf.h"
+#include "sleep.h"
+#include "xspi.h"
+#include "xgpio.h"
+#include "rc522.h"
+#include <string.h>
+#include "FRID_RECORDER.h"
+
+/* ====== Bạn đổi 2 DEVICE_ID này theo xparameters.h của bạn ====== */
+#define SPI_DEV_ID   XPAR_AXI_QUAD_SPI_0_DEVICE_ID
+#define GPIO_DEV_ID  XPAR_AXI_GPIO_0_DEVICE_ID
+
+/* rc522.c đang dùng GPIO: CS_CHANNEL=1, RST_CHANNEL=2 */
+#define CS_CHANNEL   1
+#define RST_CHANNEL  2
+
+/* ====== Global theo đúng rc522.c (extern) ====== */
+XSpi  SpiInstance;
+XGpio GpioInstance;
+
+uint8_t state_ment = 0;
+uint8_t str_1[MAX_LEN];
+uint8_t card_id[5];
+uint8_t card_id2[3];
+
+/* ====== Allow list (UID 4 byte) ====== */
+//static const uint8_t UID_ALLOW_0[4] = {0x5A, 0x73, 0x3D, 0x02};
+//static const uint8_t UID_ALLOW_1[4] = {0x6F, 0x0A, 0x20, 0x1F};
+
+
+static void print_uid4(const uint8_t uid4[4])
+{
+    xil_printf("UID:%02X %02X %02X %02X",
+               uid4[0], uid4[1], uid4[2], uid4[3]);
+}
+
+static int spi_init(void)
+{
+    XSpi_Config *cfg = XSpi_LookupConfig(SPI_DEV_ID);
+    if (!cfg) return XST_FAILURE;
+
+    int st = XSpi_CfgInitialize(&SpiInstance, cfg, cfg->BaseAddress);
+    if (st != XST_SUCCESS) return st;
+
+    /*
+      - MASTER
+      - Manual slave select (dù CS bạn đang dùng GPIO, vẫn set để SPI driver ổn định)
+      - Mode 0: CPOL=0, CPHA=0 (mặc định XSpi thường là mode 0)
+    */
+    st = XSpi_SetOptions(&SpiInstance,
+                         XSP_MASTER_OPTION |
+                         XSP_MANUAL_SSELECT_OPTION);
+    if (st != XST_SUCCESS) return st;
+
+    XSpi_SetSlaveSelect(&SpiInstance, 0x01);
+    XSpi_Start(&SpiInstance);
+    XSpi_IntrGlobalDisable(&SpiInstance);
+
+    return XST_SUCCESS;
+}
+
+static int gpio_init(void)
+{
+    int st = XGpio_Initialize(&GpioInstance, GPIO_DEV_ID);
+    if (st != XST_SUCCESS) return st;
+
+    /* Channel 1,2 output */
+    XGpio_SetDataDirection(&GpioInstance, CS_CHANNEL, 0x0);
+    XGpio_SetDataDirection(&GpioInstance, RST_CHANNEL, 0x0);
+
+    /* idle: CS=1, RST=1 */
+    XGpio_DiscreteWrite(&GpioInstance, CS_CHANNEL, 1);
+    XGpio_DiscreteWrite(&GpioInstance, RST_CHANNEL, 1);
+
+    return XST_SUCCESS;
+}
+
+int main()
+{
+    xil_printf("\r\n=== RC522 Access Control (MicroBlaze) ===\r\n");
+
+    if (gpio_init() != XST_SUCCESS) {
+        xil_printf("GPIO init FAIL\r\n");
+        return -1;
+    }
+
+    if (spi_init() != XST_SUCCESS) {
+        xil_printf("SPI init FAIL\r\n");
+        return -1;
+    }
+
+    /* Reset RC522 rõ ràng hơn */
+    XGpio_DiscreteWrite(&GpioInstance, RST_CHANNEL, 0);
+    usleep(2000);
+    XGpio_DiscreteWrite(&GpioInstance, RST_CHANNEL, 1);
+    usleep(5000);
+
+    rc522_init();
+    xil_printf("RC522 init done. Tap card...\r\n");
+
+    uint8_t last_uid[4] = {0,0,0,0};
+    int have_last = 0;
+
+    while (1)
+    {
+        get_card_id(); /* cập nhật state_ment và card_id[0..4] */
+
+        if (state_ment == MI_OK)
+        {
+            uint8_t uid4[4] = {card_id[0], card_id[1], card_id[2], card_id[3]};
+
+            /* tránh spam khi giữ thẻ trên đầu đọc */
+            if (!have_last || memcmp(uid4, last_uid, 4) != 0)
+            {
+                memcpy(last_uid, uid4, 4);
+                have_last = 1;
+                uint32_t combined_uid = ((uint32_t)uid4[0] << 24) | ((uint32_t)uid4[1] << 16) | ((uint32_t)uid4[2] << 8)  | ((uint32_t)uid4[3]);
+                FRID_RECORDER_mWriteReg(XPAR_FRID_RECORDER_0_S_AXI_BASEADDR, 0, combined_uid);
+                FRID_RECORDER_mWriteReg(XPAR_FRID_RECORDER_0_S_AXI_BASEADDR, 4, 1);
+                usleep(200000);
+                u8 allow = FRID_RECORDER_mReadReg(XPAR_FRID_RECORDER_0_S_AXI_BASEADDR, 8);
+                FRID_RECORDER_mWriteReg(XPAR_FRID_RECORDER_0_S_AXI_BASEADDR, 4, 0);
+                print_uid4(uid4);
+                if (allow) xil_printf("  => ALLOW\r\n");
+                else       xil_printf("  => DENY\r\n");
+            }
+        }
+
+        usleep(50000); /* 50ms */
+    }
+
+    return 0;
+}
