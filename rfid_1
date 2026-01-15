@@ -7,7 +7,7 @@
 #include <string.h>
 #include "FRID_RECORDER.h"
 
-/* ====== Bạn đổi 2 DEVICE_ID này theo xparameters.h của bạn ====== */
+/* ======  đổi 2 DEVICE_ID này theo xparameters.h  ====== */
 #define SPI_DEV_ID   XPAR_AXI_QUAD_SPI_0_DEVICE_ID
 #define GPIO_DEV_ID  XPAR_AXI_GPIO_0_DEVICE_ID
 
@@ -119,8 +119,8 @@ int main()
                 FRID_RECORDER_mWriteReg(XPAR_FRID_RECORDER_0_S_AXI_BASEADDR, 0, combined_uid);
                 FRID_RECORDER_mWriteReg(XPAR_FRID_RECORDER_0_S_AXI_BASEADDR, 4, 1);
                 usleep(200000);
-                u8 allow = FRID_RECORDER_mReadReg(XPAR_FRID_RECORDER_0_S_AXI_BASEADDR, 8);
-                FRID_RECORDER_mWriteReg(XPAR_FRID_RECORDER_0_S_AXI_BASEADDR, 4, 0);
+                int allow = FRID_RECORDER_mReadReg(XPAR_FRID_RECORDER_0_S_AXI_BASEADDR, 8);
+//                FRID_RECORDER_mWriteReg(XPAR_FRID_RECORDER_0_S_AXI_BASEADDR, 4, 0);
                 print_uid4(uid4);
                 if (allow) xil_printf("  => ALLOW\r\n");
                 else       xil_printf("  => DENY\r\n");
